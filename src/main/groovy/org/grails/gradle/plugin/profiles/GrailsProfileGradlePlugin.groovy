@@ -51,7 +51,9 @@ class GrailsProfileGradlePlugin implements Plugin<Project> {
     void apply(Project project) {
         project.getPluginManager().apply(BasePlugin.class)
         project.configurations.create(CONFIGURATION_NAME)
-        def profileConfiguration = project.configurations.create(RUNTIME_CONFIGURATION)
+        def profileConfiguration = project.configurations.findByName(RUNTIME_CONFIGURATION)
+
+        if (!profileConfiguration) profileConfiguration = project.configurations.create(RUNTIME_CONFIGURATION)
 
         profileConfiguration.resolutionStrategy.eachDependency {
             DependencyResolveDetails details = (DependencyResolveDetails)it
@@ -93,7 +95,7 @@ class GrailsProfileGradlePlugin implements Plugin<Project> {
             spec.into("skeleton")
         }
 
-        def processResources = project.tasks.create("processResources", Copy, (Action){ Copy c ->
+        def processResources = project.tasks.create("processProfileResources", Copy, (Action){ Copy c ->
             c.with(spec1, spec2, spec3, spec4)
             c.into(new File(resourcesDir, "/META-INF/grails-profile"))
 
@@ -107,9 +109,9 @@ class GrailsProfileGradlePlugin implements Plugin<Project> {
             }
         })
 
-        def classsesDir = new File(project.buildDir, "classes/profile")
-        def compileTask = project.tasks.create("compileProfile", ProfileCompilerTask, (Action){ ProfileCompilerTask task ->
-            task.destinationDir = classsesDir
+        def profileClassesDir = new File(project.buildDir, "classes/profile")
+        def compileProfileTask = project.tasks.create("compileProfile", ProfileCompilerTask, (Action){ ProfileCompilerTask task ->
+            task.destinationDir = profileClassesDir
             task.source = commandsDir
             task.config = profileYml
             if(templatesDir.exists()) {
@@ -118,26 +120,44 @@ class GrailsProfileGradlePlugin implements Plugin<Project> {
             task.classpath = project.configurations.getByName(RUNTIME_CONFIGURATION) + project.files(IOUtils.findJarFile(GroovyScriptCommand))
         })
 
-        def jarTask = project.tasks.create("jar", Jar, (Action) { Jar jar ->
-            jar.dependsOn(processResources, compileTask)
-            jar.from(resourcesDir)
-            jar.from(classsesDir)
-            jar.destinationDir = new File(project.buildDir, "libs")
-            jar.setDescription("Assembles a jar archive containing the profile classes.")
-            jar.setGroup(BUILD_GROUP)
+        def groovyClassesDir = new File(project.buildDir, "classes/groovy/main")
+        def compileTask = project.tasks.findByName("compileGroovy")
+        if (compileTask) {
+            compileTask.dependsOn(compileProfileTask)
+        }
 
-            ArchivePublishArtifact jarArtifact = new ArchivePublishArtifact(jar)
+        Jar jarTask = (Jar) project.tasks.findByName("jar")
+
+        if (!jarTask) {
+            jarTask = project.tasks.create("jar", Jar)
+        }
+
+        if (jarTask) {
+            jarTask.dependsOn(processResources)
+            if (compileTask) {
+                jarTask.dependsOn(compileTask)
+            }
+            jarTask.from(resourcesDir)
+            if (compileTask) {
+                jarTask.from(groovyClassesDir)
+            }
+            jarTask.from(profileClassesDir)
+            jarTask.destinationDir = new File(project.buildDir, "libs")
+            jarTask.setDescription("Assembles a jar archive containing the profile classes.")
+            jarTask.setGroup(BUILD_GROUP)
+
+            ArchivePublishArtifact jarArtifact = new ArchivePublishArtifact(jarTask)
             project.artifacts.add(CONFIGURATION_NAME, jarArtifact)
 
-            jar.doFirst {
+            jarTask.doFirst {
                 for(String file in DirectoryScanner.defaultExcludes) {
                     DirectoryScanner.removeDefaultExclude(file)
                 }
             }
-            jar.doLast {
+            jarTask.doLast {
                 DirectoryScanner.resetDefaultExcludes()
             }
-        })
+        }
 
         project.tasks.create("sourcesJar", Jar, (Action) { Jar jar ->
             jar.from(commandsDir)
